@@ -16,6 +16,23 @@ mcp = FastMCP("pr-agent")
 # PR template directory (shared across all modules)
 TEMPLATES_DIR = Path(__file__).parent.parent.parent / "templates"
 
+# Маппинг типов изменений к файлам шаблонов
+TYPE_MAPPING = {
+    "bug": "bug.md",
+    "fix": "bug.md",
+    "feature": "feature.md",
+    "enhancement": "feature.md",
+    "docs": "docs.md",
+    "documentation": "docs.md",
+    "refactor": "refactor.md",
+    "cleanup": "refactor.md",
+    "test": "test.md",
+    "testing": "test.md",
+    "performance": "performance.md",
+    "optimization": "performance.md",
+    "security": "security.md",
+}
+
 
 # TODO: Implement tool functions here
 # Example structure for a tool:
@@ -62,17 +79,18 @@ async def analyze_file_changes(
     """
     try:
         # 1) Определим рабочую директорию
+        # Используем git rev-parse чтобы найти корень репозитория,
+        # не обращаясь к клиенту (list_roots может вызвать deadlock).
         working_dir = None
-        if cwd_from_root:
-            try:
-                context = mcp.get_context()
-                roots_result = await context.session.list_roots()
-                if roots_result.roots:
-                    # Берём первый root
-                    working_dir = roots_result.roots[0].uri.path
-            except (ValueError, AttributeError):
-                # Контекст недоступен (например, в тестах) - используем текущую директорию
-                working_dir = None
+        try:
+            top = subprocess.run(
+                ["git", "rev-parse", "--show-toplevel"],
+                capture_output=True, text=True, check=True,
+            ).stdout.strip()
+            if top:
+                working_dir = top
+        except subprocess.CalledProcessError:
+            pass
 
         def run_git(args: list[str]) -> subprocess.CompletedProcess:
             return subprocess.run(
@@ -161,8 +179,46 @@ async def analyze_file_changes(
 @mcp.tool()
 async def get_pr_templates() -> str:
     """List available PR templates with their content."""
-    # TODO: Implement this tool
-    return json.dumps({"error": "Not implemented yet", "hint": "Read templates from TEMPLATES_DIR"})
+    try:
+        # Проверяем, существует ли директория с шаблонами
+        if not TEMPLATES_DIR.exists():
+            return json.dumps(
+                {"error": "templates_dir_not_found", "hint": "Templates directory does not exist."},
+                ensure_ascii=False,
+            )
+
+        # Получаем список всех .md файлов в директории шаблонов
+        template_files = sorted(TEMPLATES_DIR.glob("*.md"))
+
+        if not template_files:
+            return json.dumps(
+                {"error": "no_templates_found", "hint": "No .md template files found."},
+                ensure_ascii=False,
+            )
+
+        # Читаем содержимое каждого шаблона и возвращаем как массив
+        templates = []
+        for template_file in template_files:
+            try:
+                content = template_file.read_text(encoding="utf-8")
+                templates.append(
+                    {
+                        "filename": template_file.name,
+                        "name": template_file.stem,
+                        "content": content,
+                    }
+                )
+            except OSError:
+                # Пропускаем файлы, которые не удалось прочитать
+                pass
+
+        return json.dumps(templates, ensure_ascii=False, indent=2)
+
+    except Exception as e:
+        return json.dumps(
+            {"error": "unexpected_error", "message": str(e)},
+            ensure_ascii=False,
+        )
 
 
 @mcp.tool()
@@ -173,9 +229,60 @@ async def suggest_template(changes_summary: str, change_type: str) -> str:
         changes_summary: Your analysis of what the changes do
         change_type: The type of change you've identified (bug, feature, docs, refactor, test, etc.)
     """
-    # TODO: Implement this tool
-    return json.dumps({"error": "Not implemented yet", "hint": "Map change_type to templates"})
+    # Получаем список доступных шаблонов
+    templates_response = await get_pr_templates()
+    templates = json.loads(templates_response)
+
+    # Проверяем, не было ли ошибки при получении шаблонов (если вернулся dict с error)
+    if isinstance(templates, dict) and "error" in templates:
+        return json.dumps(
+            {
+                "error": "templates_unavailable",
+                "details": templates,
+                "hint": "Could not load PR templates.",
+            },
+            ensure_ascii=False,
+        )
+
+    # Находим соответствующий шаблон по типу изменений
+    change_type_lower = change_type.lower().strip()
+    template_file = TYPE_MAPPING.get(change_type_lower, "feature.md")
+
+    # Ищем шаблон в списке
+    selected_template = next(
+        (t for t in templates if t["filename"] == template_file),
+        templates[0] if templates else None  # По умолчанию — первый шаблон
+    )
+
+    if selected_template is None:
+        return json.dumps(
+            {
+                "error": "no_templates_available",
+                "hint": "No templates found to suggest.",
+            },
+            ensure_ascii=False,
+        )
+
+    suggestion = {
+        "recommended_template": selected_template,
+        "reasoning": f"Based on your analysis: '{changes_summary}', this appears to be a {change_type} change.",
+        "template_content": selected_template.get("content", ""),
+        "usage_hint": "Claude can help you fill out this template based on the specific changes in your PR.",
+    }
+
+    return json.dumps(suggestion, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+async def add_numbers(a: int, b: int) -> str:
+    """Simple test tool: returns the sum of two numbers.
+
+    Args:
+        a: First number
+        b: Second number
+    """
+    return json.dumps({"result": a + b})
 
 
 if __name__ == "__main__":
-    mcp.run()
+    mcp.run(transport="stdio")

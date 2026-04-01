@@ -52,7 +52,7 @@ def test_todos():
     """Check that TODO comments exist for learners."""
     print("\nTODO Comments:")
     
-    with open("server.py", "r") as f:
+    with open("server.py", "r", encoding="utf-8") as f:
         content = f.read()
     
     todos = []
@@ -122,7 +122,7 @@ def test_no_implementation():
     """Ensure starter code doesn't contain the solution."""
     print("\nImplementation Check:")
     
-    with open("server.py", "r") as f:
+    with open("server.py", "r", encoding="utf-8") as f:
         content = f.read()
     
     # Check that tool functions are not implemented
