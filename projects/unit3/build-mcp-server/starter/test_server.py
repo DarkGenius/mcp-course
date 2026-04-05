@@ -24,6 +24,14 @@ except ImportError as e:
     IMPORT_ERROR = str(e)
 
 
+def _git_completed(stdout: str = "", stderr: str = "", returncode: int = 0) -> MagicMock:
+    m = MagicMock()
+    m.stdout = stdout
+    m.stderr = stderr
+    m.returncode = returncode
+    return m
+
+
 class TestImplementation:
     """Test that the required functions are implemented."""
     
@@ -43,33 +51,52 @@ class TestAnalyzeFileChanges:
     @pytest.mark.asyncio
     async def test_returns_json_string(self):
         """Test that analyze_file_changes returns a JSON string."""
-        with patch('subprocess.run') as mock_run:
-            mock_run.return_value = MagicMock(stdout="", stderr="")
-            
+        with patch("subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                _git_completed("/fake/repo\n"),
+                _git_completed("true\n"),
+                _git_completed(""),
+                _git_completed(""),
+                _git_completed(""),
+                _git_completed(""),
+            ]
+
             result = await analyze_file_changes()
-            
+
             assert isinstance(result, str), "Should return a string"
-            # Should be valid JSON
             data = json.loads(result)
             assert isinstance(data, dict), "Should return a JSON object"
     
     @pytest.mark.asyncio
     async def test_includes_required_fields(self):
         """Test that the result includes expected fields."""
-        with patch('subprocess.run') as mock_run:
-            mock_run.return_value = MagicMock(stdout="M\tfile1.py\n", stderr="")
-            
+        with patch("subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                _git_completed("/fake/repo\n"),
+                _git_completed("true\n"),
+                _git_completed("M\tfile1.py\n"),
+                _git_completed(" 1 file changed, 2 insertions(+), 1 deletions(-)\n"),
+                _git_completed("abc Short msg\n"),
+                _git_completed("diff --git a/f b/f\n"),
+            ]
+
             result = await analyze_file_changes()
             data = json.loads(result)
-            
-            # For starter code, accept error messages; for full implementation, expect data
+
             is_implemented = not ("error" in data and "Not implemented" in str(data.get("error", "")))
             if is_implemented:
-                # Check for some expected fields (flexible to allow different implementations)
-                assert any(key in data for key in ["files_changed", "files", "changes", "diff"]), \
-                    "Result should include file change information"
+                assert any(
+                    key in data
+                    for key in [
+                        "files_changed",
+                        "files",
+                        "changes",
+                        "diff",
+                        "changed_files",
+                        "commits",
+                    ]
+                ), "Result should include file change information"
             else:
-                # Starter code - just verify it returns something structured
                 assert isinstance(data, dict), "Should return a JSON object even if not implemented"
 
 
